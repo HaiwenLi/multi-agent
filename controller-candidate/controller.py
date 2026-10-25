@@ -32,6 +32,14 @@ class Controller:
                 or not assignment.get('acknowledged')):
             raise Blocked('assignment_not_acknowledged')
         intent = {name: item[name] for name in ('run', 'task', 'epoch', 'action_id', 'seat')}
+        limits = self.store.seed.get('limits', {})
+        max_starts = limits.get('starts')
+        if max_starts is not None and snapshot['budget']['starts'] >= max_starts:
+            raise Blocked('budget_exhausted')
+        max_active = limits.get('active', 2)
+        active = sum(1 for entry in snapshot['intents'] if entry.get('uncertain'))
+        if active >= max_active:
+            raise Blocked('concurrency_limit')
         self.store.append('intent', intent)
         result = self.native.invoke(seat, assignment.get('session'), item.get('body', ''),
                                     self.store.root / 'workspaces' / seat)

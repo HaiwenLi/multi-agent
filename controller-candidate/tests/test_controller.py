@@ -24,6 +24,15 @@ class Native:
         pass
 
 
+def setup_assigned_task(store, task, seat, revision):
+    store.append('assignment', {'task': task, 'seat': seat, 'epoch': 1, 'revision': revision,
+                                'session': 's-' + task}, capability=store.capabilities['manager'])
+    store.append('ack', {'task': task, 'seat': seat, 'epoch': 1, 'revision': revision},
+                 capability=store.capabilities[seat])
+    store.append('inbox', {'run': 'controller-run', 'task': task, 'epoch': 1, 'action_id': 'work',
+                           'seat': seat, 'revision': revision, 'body': task})
+
+
 class ControllerTests(unittest.TestCase):
     def test_real_native_adapter_persists_filtered_artifact_before_finish(self):
         class Supervisor:
@@ -71,6 +80,35 @@ class ControllerTests(unittest.TestCase):
                 result = Controller(restarted, None, None, Native()).recover([], {})
                 self.assertEqual(result['status'], 'blocked')
                 self.assertEqual(result['reason'], 'durable_reconciliation_required')
+
+    def test_budget_and_concurrency_limits_block_before_new_intent(self):
+        with tempfile.TemporaryDirectory() as folder:
+            tight = seed()
+            tight['limits'] = {'starts': 1, 'active': 2}
+            with RunStore(Path(folder), tight) as store:
+                setup_assigned_task(store, 'A', 'E1', 'revA')
+                setup_assigned_task(store, 'B', 'E2', 'revB')
+                native = Native()
+                controller = Controller(store, None, None, native)
+                self.assertEqual(controller.dispatch_one('E1')['task'], 'A')
+                with self.assertRaisesRegex(Blocked, 'budget_exhausted'):
+                    controller.dispatch_one('E2')
+                self.assertEqual(len(native.calls), 1)
+                self.assertEqual(len(store.snapshot()['intents']), 1)
+
+        with tempfile.TemporaryDirectory() as folder:
+            tight = seed()
+            tight['limits'] = {'starts': 12, 'active': 1}
+            with RunStore(Path(folder), tight) as store:
+                setup_assigned_task(store, 'A', 'E1', 'revA')
+                store.append('intent', {'run': 'controller-run', 'task': 'B', 'epoch': 1,
+                                        'action_id': 'occupied', 'seat': 'E2'})
+                native = Native()
+                controller = Controller(store, None, None, native)
+                with self.assertRaisesRegex(Blocked, 'concurrency_limit'):
+                    controller.dispatch_one('E1')
+                self.assertEqual(native.calls, [])
+                self.assertEqual(len(store.snapshot()['intents']), 1)
 
     def test_stale_review_or_missing_check_never_accepts(self):
         with tempfile.TemporaryDirectory() as folder:

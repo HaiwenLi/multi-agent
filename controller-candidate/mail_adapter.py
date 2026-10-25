@@ -1,7 +1,6 @@
 """Injected deterministic Mail boundary; it never turns Mail text into authority."""
 import hashlib
 import json
-
 from run_store import Blocked
 
 
@@ -21,6 +20,9 @@ class MailAdapter:
         self.store = store
 
     def poll(self, seat: str) -> list[dict]:
+        allowed_senders = self.store.seed.get('senders', {}).get(seat)
+        if not allowed_senders:
+            raise Blocked('sender_policy_missing')
         events = self.transport.inbox_events(seat, self.store.snapshot()['cursor'], limit=20)
         queued = []
         snapshot = self.store.snapshot()
@@ -32,10 +34,13 @@ class MailAdapter:
             required = ('run', 'task', 'epoch', 'action_id', 'seat', 'revision', 'message_id', 'cursor', 'sender')
             if any(name not in event for name in required) or event['seat'] != seat:
                 raise Blocked('invalid_mail_envelope')
+            if event['sender'] not in allowed_senders:
+                raise Blocked('untrusted_sender')
             if event['run'] != snapshot['run']:
                 raise Blocked('wrong_run')
             try:
-                if current_cursor is not None and int(event['cursor']) > int(current_cursor) + 1:
+                floor = int(current_cursor) if current_cursor is not None else 0
+                if int(event['cursor']) > floor + 1:
                     raise Blocked('ahead_cursor')
             except ValueError as error:
                 raise Blocked('invalid_cursor') from error
@@ -57,7 +62,8 @@ class MailAdapter:
         snapshot = self.store.snapshot()
         existing = snapshot['outbox'].get(application_id)
         if existing:
-            if existing['thread'] != thread:
+            if (existing['thread'] != thread
+                    or existing['body_sha256'] != hashlib.sha256(body).hexdigest()):
                 raise Blocked('conflicting_outbox')
             receipt = snapshot['receipts'].get(application_id)
             if receipt:

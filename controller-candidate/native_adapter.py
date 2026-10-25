@@ -1,8 +1,26 @@
 """Seat-bound native boundary for deterministic fixtures and future live preflight."""
+import re
 import time
 
 from native_supervisor import native_argv
 from run_store import Blocked
+
+
+# Fail-closed deny set: a narrow allowlist proof is still required before any
+# live native capture; these patterns only harden the deterministic boundary.
+_DENY_PATTERNS = (
+    re.compile(r'(?i)authorization\s*:\s*bearer\s+\S+'),
+    re.compile(r'(?i)\b(?:password|passwd|passphrase|secret|api[_-]?key|'
+               r'access[_-]?token|auth[_-]?token)\s*[=:]\s*\S+'),
+    re.compile(r'\b(?:sk-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9]{16,}|gho_[A-Za-z0-9]{16,}|'
+               r'ghs_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|'
+               r'xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16})'),
+    re.compile(r'-----BEGIN [A-Z ]*PRIVATE KEY-----'),
+)
+
+
+def _filters_clean(text: str) -> bool:
+    return not any(pattern.search(text) for pattern in _DENY_PATTERNS)
 
 
 class NativeAdapter:
@@ -33,7 +51,7 @@ class NativeAdapter:
                 denied = denied or event.get('denied') is True
             elif event.get('type') == 'final' and isinstance(event.get('text'), str):
                 text = event['text']
-                if 'authorization:' in text.lower():
+                if not _filters_clean(text):
                     raise Blocked('unfiltered_native_output')
                 final_text = text
             elif event.get('type') == 'usage':

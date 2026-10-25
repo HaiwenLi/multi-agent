@@ -45,6 +45,32 @@ class NativeAdapterTests(unittest.TestCase):
             with self.assertRaisesRegex(Blocked, 'session_already_bound'):
                 adapter.invoke('R', 'pi-e2', 'brief', Path(folder))
 
+    def test_alternate_secret_spellings_and_raw_events_never_reach_results(self):
+        secrets = [
+            'token ghp_AbCdEf0123456789abcdefghijklmnopqrstuvwxyz leaked',
+            'config password=hunter2 here',
+            'route sk-proj-AbCdEf0123456789abcdefghijklmnopqrstuvwxyz',
+            '-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n-----END RSA PRIVATE KEY-----',
+            'header Authorization: Bearer abc.def.ghi',
+        ]
+        for secret in secrets:
+            with self.subTest(secret=secret[:30]):
+                def capture(*_args, text=secret):
+                    return [{'type': 'final', 'text': text}]
+                with tempfile.TemporaryDirectory() as folder:
+                    with self.assertRaisesRegex(Blocked, 'unfiltered_native_output'):
+                        NativeAdapter(Supervisor(), capture).invoke('E2', 'session-token',
+                                                                    'brief', Path(folder))
+
+        def capture(*_args):
+            return [{'type': 'raw', 'text': 'private reasoning password=hunter2'},
+                    {'type': 'final', 'text': 'project-safe final'}]
+        with tempfile.TemporaryDirectory() as folder:
+            result = NativeAdapter(Supervisor(), capture).invoke('E2', 'session-token',
+                                                                 'brief', Path(folder))
+            self.assertNotIn('hunter2', str(result))
+            self.assertEqual(result['final_text'], 'project-safe final')
+
     def test_stop_returns_partial_when_service_or_permission_is_unknown(self):
         adapter = NativeAdapter(Supervisor(), capture)
         report = adapter.stop('E1')

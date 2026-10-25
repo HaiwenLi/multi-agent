@@ -14,7 +14,8 @@ from run_store import Blocked, RunStore
 
 def seed():
     return {'run': 'matrix-run', 'roles': {'M': 'opencode', 'E1': 'opencode', 'E2': 'pi', 'R': 'pi'},
-            'limits': {'starts': 12}, 'review_policy': {}}
+            'limits': {'starts': 12}, 'review_policy': {},
+            'senders': {'E1': ['M'], 'E2': ['M'], 'R': ['M']}}
 
 
 def digest(value):
